@@ -87,19 +87,19 @@ final class AppModel {
                 let scan = try await FileScanner.scan(roots: roots) { progress in
                     Task { @MainActor [weak self] in self?.update(progress) }
                 }
-                scannedFiles = scan.files
+                scannedFiles = scan.items
                 recomputeLargeFiles()
                 duplicateGroups = []
                 hasScanned = true
                 phase = .comparing(label: "Looking for duplicates…", fraction: nil)
 
-                duplicateGroups = try await DuplicateFinder.find(in: scan.files, options: duplicateOptions) { progress in
+                duplicateGroups = try await DuplicateFinder.find(in: scan.items, options: duplicateOptions) { progress in
                     Task { @MainActor [weak self] in self?.update(progress) }
                 }
 
                 summary = String(
                     format: "%@ files · %@ · %.1fs",
-                    scan.files.count.formatted(),
+                    scan.fileCount.formatted(),
                     ByteSize.format(scan.totalAllocatedSize),
                     scan.elapsed
                 ) + (scan.errorCount > 0 ? " · \(scan.errorCount.formatted()) unreadable" : "")
@@ -146,7 +146,7 @@ final class AppModel {
 
     func moveToTrash(_ urls: Set<URL>) {
         let outcome = Trash.moveToTrash(Array(urls))
-        let trashed = Set(outcome.trashed)
+        let trashed = Set(outcome.removed)
         scannedFiles.removeAll { trashed.contains($0.url) }
         recomputeLargeFiles()
         duplicateGroups = duplicateGroups.compactMap { $0.removing(trashed) }

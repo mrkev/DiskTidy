@@ -78,7 +78,7 @@ public struct DuplicateGroup: Hashable, Sendable, Identifiable {
 }
 
 public enum DuplicateFinder {
-    /// Finds files with identical contents:
+    /// Finds files with identical contents (packages and grouped folders are ignored):
     /// 1. group by size (and collapse hard links),
     /// 2. hash the first and last chunk of each candidate,
     /// 3. fully hash files that still match.
@@ -93,7 +93,7 @@ public enum DuplicateFinder {
 
         // 1. Size buckets. Hard links are the same file, not duplicates.
         var byIdentity: [FileIdentity: FileEntry] = [:]
-        for file in files where file.logicalSize >= minimumSize && byIdentity[file.identity] == nil {
+        for file in files where file.kind == .file && file.logicalSize >= minimumSize && byIdentity[file.identity] == nil {
             byIdentity[file.identity] = file
         }
         let sameSize = Dictionary(grouping: byIdentity.values, by: \.logicalSize)

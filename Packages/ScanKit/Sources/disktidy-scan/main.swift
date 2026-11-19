@@ -2,11 +2,14 @@ import Foundation
 import ScanKit
 
 let usage = """
-    usage: disktidy-scan large [path ...] [--min SIZE] [--top N]
-           disktidy-scan dupes [path ...] [--min SIZE]
+    usage: disktidy-scan large [path ...] [--min SIZE] [--top N] [--expand]
+           disktidy-scan dupes [path ...] [--min SIZE] [--expand]
+           disktidy-scan cleanup caches|developer|downloads|leftovers
 
     Paths default to the current directory. SIZE examples: 500KB, 100MB, 1.5GB.
     Defaults: large --min 100MB --top 50; dupes --min 1MB.
+    Packages (.app, …) and developer folders (node_modules, .git, …) are reported
+    as single items; --expand scans inside them instead.
     """
 
 func printErr(_ text: String) {
@@ -22,24 +25,51 @@ func pad(_ text: String, _ width: Int) -> String {
     String(repeating: " ", count: max(0, width - text.count)) + text
 }
 
-let clearLine = "\r\u{1B}[K"
-
 /// Live progress, shown only when stderr is a terminal.
 func printProgress(_ text: String) {
     guard isatty(STDERR_FILENO) != 0 else { return }
-    printErr(clearLine + text)
+    printErr("\r\u{1B}[K" + text)
+}
+
+func describe(_ item: FileEntry) -> String {
+    switch item.kind {
+    case .file: item.path
+    case .package: "\(item.path)/  [package, \(item.fileCount.formatted()) files]"
+    case .folder: "\(item.path)/  [folder, \(item.fileCount.formatted()) files]"
+    }
 }
 
 var arguments = Array(CommandLine.arguments.dropFirst())
-guard let command = arguments.first, ["large", "dupes"].contains(command) else {
+guard let command = arguments.first, ["large", "dupes", "cleanup"].contains(command) else {
     print(usage)
     exit(arguments.isEmpty ? 0 : 2)
 }
 arguments.removeFirst()
 
+if command == "cleanup" {
+    guard arguments.count == 1, let category = CleanupCategory(rawValue: arguments[0]) else {
+        fail("cleanup needs one of: \(CleanupCategory.allCases.map(\.rawValue).joined(separator: ", "))")
+    }
+    printProgress("Measuring…")
+    let context = CleanupContext(installedApps: .discover())
+    let report = await CleanupScanner.scan(category, context: context)
+    printProgress("")
+    for group in report.groups {
+        print("\(group.title) — \(ByteSize.format(group.totalSize))\(group.note.map { "  (\($0))" } ?? "")")
+        for item in group.items {
+            let detail = item.detail.map { "  \($0)" } ?? ""
+            print("\(pad(ByteSize.format(item.allocatedSize), 12))  \(item.title)\(detail)")
+        }
+        print()
+    }
+    print("\(category.title): \(ByteSize.format(report.totalSize)) in \(report.items.count) items")
+    exit(0)
+}
+
 var paths: [String] = []
 var minimumSize: Int64?
 var top = 50
+var expand = false
 var index = 0
 while index < arguments.count {
     let argument = arguments[index]
@@ -52,6 +82,8 @@ while index < arguments.count {
         index += 1
         guard index < arguments.count, let n = Int(arguments[index]), n > 0 else { fail("--top needs a positive number") }
         top = n
+    case "--expand":
+        expand = true
     case "-h", "--help":
         print(usage)
         exit(0)
@@ -63,28 +95,32 @@ while index < arguments.count {
 }
 if paths.isEmpty { paths = [FileManager.default.currentDirectoryPath] }
 let roots = paths.map { URL(fileURLWithPath: $0) }
+let threshold = minimumSize ?? (command == "large" ? 100_000_000 : 1_000_000)
 
-let scan = try await FileScanner.scan(roots: roots) { progress in
+let options = ScanOptions(
+    treatPackagesAsItems: !expand,
+    groupedFolderNames: expand ? [] : ScanOptions.developerFolderNames,
+    minimumRetainedSize: threshold
+)
+let scan = try await FileScanner.scan(roots: roots, options: options) { progress in
     printProgress("Scanning… \(progress.filesVisited) files")
 }
 printProgress("")
 printErr(String(
     format: "Scanned %d files (%@) in %.1fs, %d unreadable\n\n",
-    scan.files.count, ByteSize.format(scan.totalAllocatedSize), scan.elapsed, scan.errorCount
+    scan.fileCount, ByteSize.format(scan.totalAllocatedSize), scan.elapsed, scan.errorCount
 ))
 
 switch command {
 case "large":
-    let threshold = minimumSize ?? 100_000_000
-    let files = LargeFileFinder.find(in: scan.files, minimumSize: threshold, limit: top)
-    if files.isEmpty { print("No files of \(ByteSize.format(threshold)) or more.") }
-    for file in files {
-        print("\(pad(ByteSize.format(file.allocatedSize), 10))  \(file.path)")
+    let items = LargeFileFinder.find(in: scan.items, minimumSize: threshold, limit: top)
+    if items.isEmpty { print("Nothing of \(ByteSize.format(threshold)) or more.") }
+    for item in items {
+        print("\(pad(ByteSize.format(item.allocatedSize), 10))  \(describe(item))")
     }
 
 default:
-    let options = DuplicateOptions(minimumSize: minimumSize ?? 1_000_000)
-    let groups = try await DuplicateFinder.find(in: scan.files, options: options) { progress in
+    let groups = try await DuplicateFinder.find(in: scan.items, options: DuplicateOptions(minimumSize: threshold)) { progress in
         let label = progress.stage == .quickPass ? "Comparing" : "Verifying"
         printProgress("\(label)… \(progress.completed)/\(progress.total)")
     }

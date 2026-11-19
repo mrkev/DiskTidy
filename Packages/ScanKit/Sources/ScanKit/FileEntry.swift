@@ -6,8 +6,16 @@ public struct FileIdentity: Hashable, Sendable {
     public let inode: UInt64
 }
 
-/// A regular file found during a scan.
+/// A file found during a scan, or a package/folder reported as a single item.
 public struct FileEntry: Hashable, Sendable, Identifiable {
+    public enum Kind: Sendable, Hashable {
+        case file
+        /// A bundle like `.app` or `.photoslibrary`, measured as a whole.
+        case package
+        /// A grouped folder like `node_modules`, measured as a whole.
+        case folder
+    }
+
     public let url: URL
     /// Length of the file's contents in bytes (what `ls -l` shows).
     public let logicalSize: Int64
@@ -16,6 +24,9 @@ public struct FileEntry: Hashable, Sendable, Identifiable {
     public let modificationDate: Date
     public let identity: FileIdentity
     public let linkCount: Int
+    public let kind: Kind
+    /// Number of files inside, for packages and folders. 1 for files.
+    public let fileCount: Int
 
     public init(
         url: URL,
@@ -23,7 +34,9 @@ public struct FileEntry: Hashable, Sendable, Identifiable {
         allocatedSize: Int64,
         modificationDate: Date,
         identity: FileIdentity,
-        linkCount: Int
+        linkCount: Int,
+        kind: Kind = .file,
+        fileCount: Int = 1
     ) {
         self.url = url
         self.logicalSize = logicalSize
@@ -31,11 +44,17 @@ public struct FileEntry: Hashable, Sendable, Identifiable {
         self.modificationDate = modificationDate
         self.identity = identity
         self.linkCount = linkCount
+        self.kind = kind
+        self.fileCount = fileCount
     }
 
     public var id: URL { url }
     public var name: String { url.lastPathComponent }
-    public var path: String { url.path(percentEncoded: false) }
+    /// Path without a trailing slash, also for packages and folders.
+    public var path: String {
+        let path = url.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
     public var parentPath: String { url.deletingLastPathComponent().path(percentEncoded: false) }
     /// Parent folder with the home directory shortened to `~`.
     public var displayParentPath: String { (parentPath as NSString).abbreviatingWithTildeInPath }

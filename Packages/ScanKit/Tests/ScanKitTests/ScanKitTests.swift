@@ -48,7 +48,7 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         try FileManager.default.createSymbolicLink(at: dir.url.appending(path: "link"), withDestinationURL: a)
 
         let result = try await FileScanner.scan(roots: [dir.url])
-        #expect(Set(result.files.map(\.name)) == ["a.bin", "b.bin"])
+        #expect(Set(result.items.map(\.name)) == ["a.bin", "b.bin"])
     }
 
     @Test func nestedRootsAreNotCountedTwice() async throws {
@@ -56,7 +56,7 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         try dir.write("sub/b.bin", bytes(2, count: 20))
 
         let result = try await FileScanner.scan(roots: [dir.url, dir.url.appending(path: "sub")])
-        #expect(result.files.count == 1)
+        #expect(result.items.count == 1)
     }
 
     @Test func excludedPathsAreSkippedUnlessTheyContainTheRoot() async throws {
@@ -68,12 +68,12 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         let skipped = try await FileScanner.scan(
             roots: [dir.url], options: ScanOptions(excludedPaths: [root + "skip"])
         )
-        #expect(skipped.files.map(\.name) == ["a.bin"])
+        #expect(skipped.items.map(\.name) == ["a.bin"])
 
         let containing = try await FileScanner.scan(
             roots: [dir.url], options: ScanOptions(excludedPaths: [root])
         )
-        #expect(containing.files.count == 2)
+        #expect(containing.items.count == 2)
     }
 }
 
@@ -86,7 +86,7 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         try FileManager.default.linkItem(at: big, to: dir.url.appending(path: "big-link.bin"))
 
         let scan = try await FileScanner.scan(roots: [dir.url])
-        let large = LargeFileFinder.find(in: scan.files, minimumSize: 100_000)
+        let large = LargeFileFinder.find(in: scan.items, minimumSize: 100_000)
         #expect(large.count == 2)
         #expect(large.first?.logicalSize == 300_000)
         #expect(large.last?.name == "medium.bin")
@@ -108,7 +108,7 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         try dir.write("large-different-middle.bin", a)
 
         let scan = try await FileScanner.scan(roots: [dir.url])
-        let groups = try await DuplicateFinder.find(in: scan.files)
+        let groups = try await DuplicateFinder.find(in: scan.items)
 
         let names = Set(groups.map { Set($0.files.map(\.name)) })
         #expect(names == [["small-1.txt", "small-2.txt"], ["large-1.bin", "large-2.bin"]])
@@ -120,7 +120,7 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         try FileManager.default.linkItem(at: file, to: dir.url.appending(path: "b.bin"))
 
         let scan = try await FileScanner.scan(roots: [dir.url])
-        #expect(try await DuplicateFinder.find(in: scan.files).isEmpty)
+        #expect(try await DuplicateFinder.find(in: scan.items).isEmpty)
     }
 
     @Test func apfsClonesAreCountedOnce() async throws {
@@ -134,7 +134,7 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         try #require(status == 0, "clonefile failed; temp dir is not on APFS")
 
         let scan = try await FileScanner.scan(roots: [dir.url])
-        let groups = try await DuplicateFinder.find(in: scan.files)
+        let groups = try await DuplicateFinder.find(in: scan.items)
         let group = try #require(groups.first)
         #expect(group.files.count == 3)
         #expect(group.sharesStorage)
@@ -147,7 +147,7 @@ func bytes(_ seed: UInt8, count: Int) -> Data {
         let urls = try (1...3).map { try dir.write("\($0).bin", bytes(5, count: 2_000)) }
 
         let scan = try await FileScanner.scan(roots: [dir.url])
-        let group = try #require(try await DuplicateFinder.find(in: scan.files).first)
+        let group = try #require(try await DuplicateFinder.find(in: scan.items).first)
         #expect(group.removing([urls[0]])?.files.count == 2)
         #expect(group.removing([urls[0], urls[1]]) == nil)
     }
