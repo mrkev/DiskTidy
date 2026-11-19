@@ -110,24 +110,34 @@ struct SelectionBar: View {
 }
 
 struct EmptyResultsView: View {
+    @Environment(AppModel.self) private var model
     let hasScanned: Bool
     let emptyTitle: String
     var emptyDetail: String?
 
     var body: some View {
         Group {
-            if hasScanned {
+            if model.isBusy {
+                ProgressView(model.phase.description)
+            } else if hasScanned {
                 ContentUnavailableView(
                     emptyTitle,
                     systemImage: "checkmark.circle",
                     description: emptyDetail.map { Text($0) }
                 )
             } else {
-                ContentUnavailableView(
-                    "No Scan Yet",
-                    systemImage: "magnifyingglass",
-                    description: Text("Choose folders in the toolbar and click Scan.")
-                )
+                ContentUnavailableView {
+                    Label("No Scan Yet", systemImage: "magnifyingglass")
+                } description: {
+                    Text(model.roots.count == 1
+                        ? "Scan your \(model.rootsTitle) folder, choose other folders, or drop folders here."
+                        : "Scan the \(model.roots.count) chosen folders, choose others, or drop folders here.")
+                } actions: {
+                    Button("Scan \(model.rootsTitle)") { model.startScan() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                    Button("Choose Folders…") { model.chooseRoots() }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

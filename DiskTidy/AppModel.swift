@@ -36,6 +36,14 @@ enum ScanPhase: Equatable {
     case idle
     case scanning(filesVisited: Int)
     case comparing(label: String, fraction: Double?)
+
+    var description: String {
+        switch self {
+        case .idle: ""
+        case .scanning(let count): "Scanning… \(count.formatted()) files"
+        case .comparing(let label, _): label
+        }
+    }
 }
 
 enum CleanupState {
@@ -101,6 +109,15 @@ final class AppModel {
     }
 
     // MARK: Folder scan
+
+    /// Scans dropped folders (files are ignored). Returns false if nothing usable was dropped.
+    func scanDropped(_ urls: [URL]) -> Bool {
+        let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+        guard !folders.isEmpty, !isBusy else { return false }
+        roots = folders
+        startScan()
+        return true
+    }
 
     func chooseRoots() {
         guard let urls = chooseFolders(message: "Choose the folders to scan.", startingAt: roots.first) else { return }

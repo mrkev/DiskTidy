@@ -25,7 +25,7 @@ struct DuplicatesView: View {
 
             if model.duplicateGroups.isEmpty {
                 EmptyResultsView(
-                    hasScanned: model.hasScanned && model.phase == .idle,
+                    hasScanned: model.hasScanned,
                     emptyTitle: "No Duplicates",
                     emptyDetail: "Files under \(ByteSize.format(model.settings.duplicateMinimumSize)) aren't compared."
                 )

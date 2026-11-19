@@ -39,6 +39,10 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .dropDestination(for: URL.self) { urls, _ in
+                    guard !isCleanupSelected else { return false }
+                    return model.scanDropped(urls)
+                }
                 if !isCleanupSelected {
                     Divider()
                     StatusBar()
@@ -54,13 +58,22 @@ struct ContentView: View {
                         Label(model.rootsTitle, systemImage: "folder")
                             .labelStyle(.titleAndIcon)
                     }
-                    .help(model.roots.map { $0.path(percentEncoded: false) }.joined(separator: "\n"))
+                    .help("Choose folders to scan (⌘O)\n" + model.roots.map { $0.path(percentEncoded: false) }.joined(separator: "\n"))
                     .disabled(model.isBusy)
 
                     if model.isBusy {
-                        Button("Stop", systemImage: "stop.fill") { model.cancelScan() }
+                        Button {
+                            model.cancelScan()
+                        } label: {
+                            Label("Stop", systemImage: "stop.fill").labelStyle(.titleAndIcon)
+                        }
                     } else {
-                        Button("Scan", systemImage: "magnifyingglass") { model.startScan() }
+                        Button {
+                            model.startScan()
+                        } label: {
+                            Label("Scan", systemImage: "play.fill").labelStyle(.titleAndIcon)
+                        }
+                        .help("Scan \(model.rootsTitle) (⌘R)")
                     }
                 }
             }
