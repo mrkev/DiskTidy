@@ -1,6 +1,7 @@
 import AppKit
 import ScanKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FileIcon: View {
     let path: String
@@ -21,6 +22,17 @@ struct FileNameCell: View {
             Text(file.name).lineLimit(1).truncationMode(.middle)
         }
         .help(file.path)
+    }
+}
+
+extension FileEntry {
+    /// "Package · 43,419 files", "Folder · 12 files", or the file type ("MPEG-4 movie").
+    var kindDescription: String {
+        switch kind {
+        case .package: "Package · \(fileCount.formatted()) files"
+        case .folder: "Folder · \(fileCount.formatted()) files"
+        case .file: UTType(filenameExtension: url.pathExtension)?.localizedDescription ?? "Document"
+        }
     }
 }
 
@@ -50,7 +62,8 @@ struct FileRow: View {
 struct FileContextMenu: View {
     @Environment(AppModel.self) private var model
     let urls: Set<URL>
-    let onTrash: () -> Void
+    var removeTitle = "Move to Trash…"
+    let onRemove: () -> Void
 
     var body: some View {
         if !urls.isEmpty {
@@ -64,7 +77,7 @@ struct FileContextMenu: View {
                 NSPasteboard.general.setString(paths, forType: .string)
             }
             Divider()
-            Button("Move to Trash…", role: .destructive, action: onTrash)
+            Button(removeTitle, role: .destructive, action: onRemove)
         }
     }
 }
@@ -73,7 +86,8 @@ struct SelectionBar: View {
     let count: Int
     let bytes: Int64
     var warning: String?
-    let onTrash: () -> Void
+    var actionTitle = "Move to Trash…"
+    let onRemove: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -87,7 +101,7 @@ struct SelectionBar: View {
                     .foregroundStyle(.orange)
             }
             Spacer()
-            Button("Move to Trash…", action: onTrash)
+            Button(actionTitle, action: onRemove)
                 .disabled(count == 0)
         }
         .padding(.horizontal, 12)
@@ -101,48 +115,56 @@ struct EmptyResultsView: View {
     var emptyDetail: String?
 
     var body: some View {
-        if hasScanned {
-            ContentUnavailableView(
-                emptyTitle,
-                systemImage: "checkmark.circle",
-                description: emptyDetail.map { Text($0) }
-            )
-        } else {
-            ContentUnavailableView(
-                "No Scan Yet",
-                systemImage: "magnifyingglass",
-                description: Text("Choose folders in the toolbar and click Scan.")
-            )
+        Group {
+            if hasScanned {
+                ContentUnavailableView(
+                    emptyTitle,
+                    systemImage: "checkmark.circle",
+                    description: emptyDetail.map { Text($0) }
+                )
+            } else {
+                ContentUnavailableView(
+                    "No Scan Yet",
+                    systemImage: "magnifyingglass",
+                    description: Text("Choose folders in the toolbar and click Scan.")
+                )
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 extension View {
-    /// Confirms before moving files to the Trash. Set `pending` to ask.
+    /// Confirms before removing items. Set `pending` to ask.
     func trashConfirmation(
         pending: Binding<Set<URL>?>,
+        actionTitle: String = "Move to Trash",
+        bytes: @escaping (Set<URL>) -> Int64,
         warning: @escaping (Set<URL>) -> String? = { _ in nil },
         perform: @escaping (Set<URL>) -> Void
     ) -> some View {
-        modifier(TrashConfirmation(pending: pending, warning: warning, perform: perform))
+        modifier(RemovalConfirmation(
+            pending: pending, actionTitle: actionTitle, bytes: bytes, warning: warning, perform: perform
+        ))
     }
 }
 
-private struct TrashConfirmation: ViewModifier {
-    @Environment(AppModel.self) private var model
+private struct RemovalConfirmation: ViewModifier {
     @Binding var pending: Set<URL>?
+    let actionTitle: String
+    let bytes: (Set<URL>) -> Int64
     let warning: (Set<URL>) -> String?
     let perform: (Set<URL>) -> Void
 
     func body(content: Content) -> some View {
         content.confirmationDialog(
-            "Move \(pending?.count ?? 0) item(s) to the Trash?",
+            "\(actionTitle) \(pending?.count ?? 0) item(s)?",
             isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
             presenting: pending
         ) { urls in
-            Button("Move to Trash", role: .destructive) { perform(urls) }
+            Button(actionTitle, role: .destructive) { perform(urls) }
         } message: { urls in
-            let base = "Frees up to \(ByteSize.format(model.size(of: urls))) once the Trash is emptied."
+            let base = "Frees up to \(ByteSize.format(bytes(urls))) once the Trash is emptied."
             Text([warning(urls), base].compactMap { $0 }.joined(separator: "\n\n"))
         }
     }

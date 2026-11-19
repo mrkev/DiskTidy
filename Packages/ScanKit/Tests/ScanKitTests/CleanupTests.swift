@@ -73,7 +73,8 @@ import Testing
 
         let titles = Set(report.items.map(\.title))
         #expect(titles == ["com.gone.App.plist", "com.gone.App"])
-        #expect(report.items.allSatisfy { $0.detail == "com.gone.App" })
+        #expect(report.items.first { $0.title == "com.gone.App.plist" }?.detail == "com.gone.App")
+        #expect(report.items.first { $0.title == "com.gone.App" }?.detail == nil)
         // Containers are only examined with Full Disk Access.
         #expect(!report.groups.contains { $0.title == "Containers" })
     }

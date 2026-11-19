@@ -2,9 +2,13 @@ import AppKit
 import Observation
 import ScanKit
 
-enum SidebarItem: String, CaseIterable, Identifiable {
+enum SidebarItem: Hashable, Identifiable {
     case largeFiles
     case duplicates
+    case cleanup(CleanupCategory)
+
+    static let scanItems: [SidebarItem] = [.largeFiles, .duplicates]
+    static let cleanupItems: [SidebarItem] = CleanupCategory.allCases.map { .cleanup($0) }
 
     var id: Self { self }
 
@@ -12,6 +16,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .largeFiles: "Large Files"
         case .duplicates: "Duplicates"
+        case .cleanup(let category): category.title
         }
     }
 
@@ -19,6 +24,10 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .largeFiles: "externaldrive"
         case .duplicates: "doc.on.doc"
+        case .cleanup(.caches): "archivebox"
+        case .cleanup(.developer): "hammer"
+        case .cleanup(.downloads): "arrow.down.circle"
+        case .cleanup(.leftovers): "shippingbox"
         }
     }
 }
@@ -29,15 +38,34 @@ enum ScanPhase: Equatable {
     case comparing(label: String, fraction: Double?)
 }
 
+enum CleanupState {
+    case scanning
+    case loaded(CleanupReport)
+}
+
+/// User preferences for folder scans, persisted in UserDefaults.
+struct ScanSettings: Codable, Equatable {
+    var includeHidden = true
+    var treatPackagesAsItems = true
+    var groupDeveloperFolders = true
+    var excludedFolders: [String] = []
+    var duplicateMinimumSize: Int64 = 1_000_000
+
+    static let duplicateSizeChoices: [Int64] = [100_000, 1_000_000, 10_000_000, 100_000_000]
+}
+
 @Observable
 final class AppModel {
+    static let largeFileThresholds: [Int64] = [10_000_000, 50_000_000, 100_000_000, 500_000_000, 1_000_000_000]
+
     var roots: [URL] = [FileManager.default.homeDirectoryForCurrentUser]
     var selection: SidebarItem? = .largeFiles
     var largeFileThreshold: Int64 = 100_000_000 {
         didSet { recomputeLargeFiles() }
     }
-    /// Smaller duplicates are ignored. Lots of tiny dupes is mostly noise.
-    let duplicateMinimumSize: Int64 = 1_000_000
+    var settings: ScanSettings {
+        didSet { saveSettings() }
+    }
 
     private(set) var phase: ScanPhase = .idle
     private(set) var hasScanned = false
@@ -45,10 +73,20 @@ final class AppModel {
     private(set) var duplicateGroups: [DuplicateGroup] = []
     private(set) var summary: String?
     private(set) var hasFullDiskAccess = FullDiskAccess.isGranted
+    private(set) var cleanup: [CleanupCategory: CleanupState] = [:]
     var lastError: String?
 
-    private var scannedFiles: [FileEntry] = []
+    /// Items at least as big as the smallest threshold any view needs.
+    private var scannedItems: [FileEntry] = []
     private var scanTask: Task<Void, Never>?
+    private var installedApps: InstalledApps?
+
+    private static let settingsKey = "scanSettings"
+
+    init() {
+        settings = UserDefaults.standard.data(forKey: Self.settingsKey)
+            .flatMap { try? JSONDecoder().decode(ScanSettings.self, from: $0) } ?? ScanSettings()
+    }
 
     var isBusy: Bool { phase != .idle }
 
@@ -62,32 +100,33 @@ final class AppModel {
         duplicateGroups.reduce(0) { $0 + $1.reclaimableBytes }
     }
 
-    // MARK: Scanning
+    // MARK: Folder scan
 
     func chooseRoots() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = true
-        panel.prompt = "Choose"
-        panel.message = "Choose the folders to scan."
-        panel.directoryURL = roots.first
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        roots = panel.urls
+        guard let urls = chooseFolders(message: "Choose the folders to scan.", startingAt: roots.first) else { return }
+        roots = urls
     }
 
     func startScan() {
         cancelScan()
         let roots = roots
-        let duplicateOptions = DuplicateOptions(minimumSize: duplicateMinimumSize)
+        let settings = settings
+        let options = ScanOptions(
+            includeHidden: settings.includeHidden,
+            treatPackagesAsItems: settings.treatPackagesAsItems,
+            groupedFolderNames: settings.groupDeveloperFolders ? ScanOptions.developerFolderNames : [],
+            excludedPaths: ScanOptions.defaultExcludedPaths + settings.excludedFolders,
+            minimumRetainedSize: min(settings.duplicateMinimumSize, Self.largeFileThresholds.min() ?? 0)
+        )
+        let duplicateOptions = DuplicateOptions(minimumSize: settings.duplicateMinimumSize)
         phase = .scanning(filesVisited: 0)
 
         scanTask = Task {
             do {
-                let scan = try await FileScanner.scan(roots: roots) { progress in
+                let scan = try await FileScanner.scan(roots: roots, options: options) { progress in
                     Task { @MainActor [weak self] in self?.update(progress) }
                 }
-                scannedFiles = scan.items
+                scannedItems = scan.items
                 recomputeLargeFiles()
                 duplicateGroups = []
                 hasScanned = true
@@ -118,7 +157,8 @@ final class AppModel {
     }
 
     private func update(_ progress: ScanProgress) {
-        guard case .scanning = phase else { return }
+        // Progress arrives from several threads, so it can be out of order.
+        guard case .scanning(let shown) = phase, progress.filesVisited > shown else { return }
         phase = .scanning(filesVisited: progress.filesVisited)
     }
 
@@ -132,29 +172,77 @@ final class AppModel {
     }
 
     private func recomputeLargeFiles() {
-        largeFiles = LargeFileFinder.find(in: scannedFiles, minimumSize: largeFileThreshold)
+        largeFiles = LargeFileFinder.find(in: scannedItems, minimumSize: largeFileThreshold)
     }
-
-    // MARK: Actions
 
     func size(of urls: Set<URL>) -> Int64 {
         guard !urls.isEmpty else { return 0 }
-        return scannedFiles.reduce(Int64(0)) { total, file in
-            urls.contains(file.url) ? total + file.allocatedSize : total
+        return scannedItems.reduce(Int64(0)) { total, item in
+            urls.contains(item.url) ? total + item.allocatedSize : total
         }
     }
 
     func moveToTrash(_ urls: Set<URL>) {
         let outcome = Trash.moveToTrash(Array(urls))
         let trashed = Set(outcome.removed)
-        scannedFiles.removeAll { trashed.contains($0.url) }
+        scannedItems.removeAll { trashed.contains($0.url) }
         recomputeLargeFiles()
         duplicateGroups = duplicateGroups.compactMap { $0.removing(trashed) }
-        if !outcome.failures.isEmpty {
-            let names = outcome.failures.keys.map(\.lastPathComponent).sorted().prefix(5).joined(separator: ", ")
-            lastError = "Couldn't move \(outcome.failures.count) item(s) to the Trash: \(names)"
+        showFailures(outcome.failures)
+    }
+
+    // MARK: Cleanup categories
+
+    func cleanupReport(for category: CleanupCategory) -> CleanupReport? {
+        if case .loaded(let report) = cleanup[category] { return report }
+        return nil
+    }
+
+    func scanCleanup(_ category: CleanupCategory) {
+        if case .scanning = cleanup[category] { return }
+        cleanup[category] = .scanning
+        let includeContainers = hasFullDiskAccess
+        Task {
+            let apps = await loadInstalledApps()
+            let context = CleanupContext(includeAppContainers: includeContainers, installedApps: apps)
+            cleanup[category] = .loaded(await CleanupScanner.scan(category, context: context))
         }
     }
+
+    func clean(_ urls: Set<URL>, in category: CleanupCategory) {
+        guard let report = cleanupReport(for: category) else { return }
+        let items = report.items.filter { urls.contains($0.url) }
+        Task {
+            let outcome = await Cleaner.perform(items)
+            if let current = cleanupReport(for: category) {
+                cleanup[category] = .loaded(current.removing(Set(outcome.removed)))
+            }
+            showFailures(outcome.failures)
+        }
+    }
+
+    private func loadInstalledApps() async -> InstalledApps {
+        if let installedApps { return installedApps }
+        let apps = await Task.detached(priority: .userInitiated) { InstalledApps.discover() }.value
+        installedApps = apps
+        return apps
+    }
+
+    // MARK: Settings
+
+    func addExcludedFolders() {
+        guard let urls = chooseFolders(message: "Choose folders to leave out of scans.", startingAt: nil) else { return }
+        let new = urls.map { $0.path(percentEncoded: false) }.filter { !settings.excludedFolders.contains($0) }
+        settings.excludedFolders += new
+    }
+
+    private func saveSettings() {
+        if let data = try? JSONEncoder().encode(settings) {
+            UserDefaults.standard.set(data, forKey: Self.settingsKey)
+        }
+    }
+
+    // MARK: Helpers
 
     func reveal(_ urls: Set<URL>) {
         NSWorkspace.shared.activateFileViewerSelecting(Array(urls))
@@ -162,6 +250,28 @@ final class AppModel {
 
     func refreshFullDiskAccess() {
         hasFullDiskAccess = FullDiskAccess.isGranted
+    }
+
+    private func showFailures(_ failures: [URL: String]) {
+        guard !failures.isEmpty else { return }
+        let details = failures
+            .sorted { $0.key.lastPathComponent < $1.key.lastPathComponent }
+            .prefix(5)
+            .map { "\($0.key.lastPathComponent): \($0.value)" }
+            .joined(separator: "\n")
+        lastError = "Couldn't remove \(failures.count) item(s).\n\n\(details)"
+    }
+
+    private func chooseFolders(message: String, startingAt directory: URL?) -> [URL]? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Choose"
+        panel.message = message
+        panel.directoryURL = directory
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return nil }
+        return panel.urls
     }
 }
 

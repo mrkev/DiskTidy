@@ -9,11 +9,19 @@ struct ContentView: View {
         @Bindable var model = model
 
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $model.selection) { item in
-                Label(item.title, systemImage: item.systemImage)
-                    .badge(badge(for: item))
+            List(selection: $model.selection) {
+                Section("Scan") {
+                    ForEach(SidebarItem.scanItems) { item in
+                        Label(item.title, systemImage: item.systemImage).badge(badge(for: item))
+                    }
+                }
+                Section("Clean Up") {
+                    ForEach(SidebarItem.cleanupItems) { item in
+                        Label(item.title, systemImage: item.systemImage).badge(badge(for: item))
+                    }
+                }
             }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 200)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 210)
         } detail: {
             VStack(spacing: 0) {
                 if !model.hasFullDiskAccess {
@@ -22,30 +30,38 @@ struct ContentView: View {
                 }
                 Group {
                     switch model.selection ?? .largeFiles {
-                    case .largeFiles: LargeFilesView()
-                    case .duplicates: DuplicatesView()
+                    case .largeFiles:
+                        LargeFilesView()
+                    case .duplicates:
+                        DuplicatesView()
+                    case .cleanup(let category):
+                        CleanupView(category: category).id(category)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                Divider()
-                StatusBar()
+                if !isCleanupSelected {
+                    Divider()
+                    StatusBar()
+                }
             }
         }
         .toolbar {
-            ToolbarItemGroup {
-                Button {
-                    model.chooseRoots()
-                } label: {
-                    Label(model.rootsTitle, systemImage: "folder")
-                        .labelStyle(.titleAndIcon)
-                }
-                .help(model.roots.map { $0.path(percentEncoded: false) }.joined(separator: "\n"))
-                .disabled(model.isBusy)
+            if !isCleanupSelected {
+                ToolbarItemGroup {
+                    Button {
+                        model.chooseRoots()
+                    } label: {
+                        Label(model.rootsTitle, systemImage: "folder")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .help(model.roots.map { $0.path(percentEncoded: false) }.joined(separator: "\n"))
+                    .disabled(model.isBusy)
 
-                if model.isBusy {
-                    Button("Stop", systemImage: "stop.fill") { model.cancelScan() }
-                } else {
-                    Button("Scan", systemImage: "magnifyingglass") { model.startScan() }
+                    if model.isBusy {
+                        Button("Stop", systemImage: "stop.fill") { model.cancelScan() }
+                    } else {
+                        Button("Scan", systemImage: "magnifyingglass") { model.startScan() }
+                    }
                 }
             }
         }
@@ -62,11 +78,18 @@ struct ContentView: View {
         }
     }
 
-    private func badge(for item: SidebarItem) -> Int {
-        switch item {
-        case .largeFiles: model.largeFiles.count
-        case .duplicates: model.duplicateGroups.count
+    private var isCleanupSelected: Bool {
+        if case .cleanup = model.selection { return true }
+        return false
+    }
+
+    private func badge(for item: SidebarItem) -> Text? {
+        let text: String? = switch item {
+        case .largeFiles: model.largeFiles.isEmpty ? nil : model.largeFiles.count.formatted()
+        case .duplicates: model.duplicateGroups.isEmpty ? nil : model.duplicateGroups.count.formatted()
+        case .cleanup(let category): model.cleanupReport(for: category).map { ByteSize.format($0.totalSize) }
         }
+        return text.map { Text($0) }
     }
 }
 
@@ -78,7 +101,7 @@ struct FullDiskAccessBanner: View {
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Full Disk Access is off").fontWeight(.semibold)
-                Text("Mail, Messages, Safari and some Library folders can't be scanned, so results may be incomplete.")
+                Text("Mail, Messages, Safari, app containers and some Library folders can't be scanned, so results may be incomplete.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

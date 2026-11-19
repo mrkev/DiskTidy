@@ -57,6 +57,13 @@ public struct CleanupGroup: Sendable, Hashable, Identifiable {
     /// Largest first.
     public let items: [CleanupItem]
 
+    public init(id: String, title: String, note: String?, items: [CleanupItem]) {
+        self.id = id
+        self.title = title
+        self.note = note
+        self.items = items
+    }
+
     public var totalSize: Int64 { items.reduce(0) { $0 + $1.allocatedSize } }
 
     func removing(_ urls: Set<URL>) -> CleanupGroup? {

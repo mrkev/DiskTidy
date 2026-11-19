@@ -7,15 +7,13 @@ struct LargeFilesView: View {
     @State private var sortOrder = [KeyPathComparator(\FileEntry.allocatedSize, order: .reverse)]
     @State private var pendingTrash: Set<URL>?
 
-    private static let thresholds: [Int64] = [10_000_000, 50_000_000, 100_000_000, 500_000_000, 1_000_000_000]
-
     var body: some View {
         @Bindable var model = model
 
         VStack(spacing: 0) {
             HStack {
                 Picker("Larger than", selection: $model.largeFileThreshold) {
-                    ForEach(Self.thresholds, id: \.self) { Text(ByteSize.format($0)).tag($0) }
+                    ForEach(AppModel.largeFileThresholds, id: \.self) { Text(ByteSize.format($0)).tag($0) }
                 }
                 .fixedSize()
                 Spacer()
@@ -28,12 +26,19 @@ struct LargeFilesView: View {
             Divider()
 
             if model.largeFiles.isEmpty {
-                EmptyResultsView(hasScanned: model.hasScanned, emptyTitle: "No Large Files")
+                EmptyResultsView(hasScanned: model.hasScanned, emptyTitle: "Nothing Large Found")
             } else {
                 Table(model.largeFiles.sorted(using: sortOrder), selection: $selection, sortOrder: $sortOrder) {
                     TableColumn("Name", value: \.name) { file in
                         FileNameCell(file: file)
                     }
+                    .width(min: 160, ideal: 260)
+                    TableColumn("Kind") { file in
+                        Text(file.kindDescription)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .width(min: 80, ideal: 150)
                     TableColumn("Location", value: \.parentPath) { file in
                         Text(file.displayParentPath)
                             .foregroundStyle(.secondary)
@@ -52,7 +57,7 @@ struct LargeFilesView: View {
                     .width(min: 80, ideal: 110)
                 }
                 .contextMenu(forSelectionType: URL.self) { urls in
-                    FileContextMenu(urls: urls, onTrash: { pendingTrash = urls })
+                    FileContextMenu(urls: urls, onRemove: { pendingTrash = urls })
                 } primaryAction: { urls in
                     model.reveal(urls)
                 }
@@ -62,10 +67,10 @@ struct LargeFilesView: View {
             SelectionBar(
                 count: selection.count,
                 bytes: model.size(of: selection),
-                onTrash: { pendingTrash = selection }
+                onRemove: { pendingTrash = selection }
             )
         }
-        .trashConfirmation(pending: $pendingTrash) { urls in
+        .trashConfirmation(pending: $pendingTrash, bytes: model.size(of:)) { urls in
             model.moveToTrash(urls)
             selection.subtract(urls)
         }

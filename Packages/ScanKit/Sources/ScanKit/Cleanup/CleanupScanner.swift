@@ -190,12 +190,14 @@ public enum CleanupScanner {
                       !id.lowercased().hasPrefix("com.apple."),
                       !context.installedApps.isInstalled(bundleID: id)
                 else { return nil }
-                return Candidate(url: url, title: url.lastPathComponent, detail: id)
+                let title = url.lastPathComponent
+                return Candidate(url: url, title: title, detail: title == id ? nil : id)
             }
+            let warning = location.path == "Application Support" ? " · May include saved games or documents." : ""
             return GroupSpec(
                 id: "leftovers-\(location.path)",
                 title: location.title,
-                note: "~/Library/" + location.path,
+                note: "~/Library/" + location.path + warning,
                 candidates: candidates
             )
         }

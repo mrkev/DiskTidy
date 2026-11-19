@@ -20,5 +20,10 @@ struct DiskTidyApp: App {
                     .disabled(model.isBusy)
             }
         }
+
+        Settings {
+            SettingsView()
+                .environment(model)
+        }
     }
 }

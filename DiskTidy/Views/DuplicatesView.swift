@@ -27,7 +27,7 @@ struct DuplicatesView: View {
                 EmptyResultsView(
                     hasScanned: model.hasScanned && model.phase == .idle,
                     emptyTitle: "No Duplicates",
-                    emptyDetail: "Files under \(ByteSize.format(model.duplicateMinimumSize)) aren't compared."
+                    emptyDetail: "Files under \(ByteSize.format(model.settings.duplicateMinimumSize)) aren't compared."
                 )
             } else {
                 List(selection: $selection) {
@@ -42,7 +42,7 @@ struct DuplicatesView: View {
                     }
                 }
                 .contextMenu(forSelectionType: URL.self) { urls in
-                    FileContextMenu(urls: urls, onTrash: { pendingTrash = urls })
+                    FileContextMenu(urls: urls, onRemove: { pendingTrash = urls })
                 } primaryAction: { urls in
                     model.reveal(urls)
                 }
@@ -55,10 +55,10 @@ struct DuplicatesView: View {
                 warning: fullySelectedGroupCount > 0
                     ? "Every copy is selected in \(fullySelectedGroupCount) group(s)"
                     : nil,
-                onTrash: { pendingTrash = selection }
+                onRemove: { pendingTrash = selection }
             )
         }
-        .trashConfirmation(pending: $pendingTrash, warning: warning(for:)) { urls in
+        .trashConfirmation(pending: $pendingTrash, bytes: model.size(of:), warning: warning(for:)) { urls in
             model.moveToTrash(urls)
             selection.subtract(urls)
         }

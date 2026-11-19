@@ -17,13 +17,16 @@ public struct InstalledApps: Sendable {
         self.useLaunchServices = useLaunchServices
     }
 
-    /// Finds apps in the standard application folders (two levels deep, for
-    /// vendor subfolders) and also consults LaunchServices for apps elsewhere.
+    /// Finds apps in the standard application folders (including vendor
+    /// subfolders) and the Steam library, and consults LaunchServices for apps elsewhere.
     public static func discover(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> InstalledApps {
-        let folders = [
-            URL(fileURLWithPath: "/Applications"),
-            URL(fileURLWithPath: "/System/Applications"),
-            home.appending(path: "Applications"),
+        let folders: [(url: URL, depth: Int)] = [
+            (URL(fileURLWithPath: "/Applications"), 1),
+            (URL(fileURLWithPath: "/System/Applications"), 1),
+            (home.appending(path: "Applications"), 1),
+            // Steam games aren't in /Applications and often keep save games in
+            // Application Support, so they must count as installed.
+            (home.appending(path: "Library/Application Support/Steam/steamapps/common"), 2),
         ]
         var found: [String: String] = [:]
         func visit(_ folder: URL, depth: Int) {
@@ -38,7 +41,7 @@ public struct InstalledApps: Sendable {
                 }
             }
         }
-        for folder in folders { visit(folder, depth: 1) }
+        for folder in folders { visit(folder.url, depth: folder.depth) }
         return InstalledApps(bundleIdentifiers: found, useLaunchServices: true)
     }
 
