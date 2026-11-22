@@ -65,6 +65,8 @@ struct FileContextMenu: View {
     let urls: Set<URL>
     var removeTitle = "Move to Trash…"
     var onQuickLook: (() -> Void)?
+    /// Adds "Exclude from / Include in Time Machine" for the items that can be changed.
+    var showsBackupOptions = false
     let onRemove: () -> Void
 
     var body: some View {
@@ -81,8 +83,24 @@ struct FileContextMenu: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(paths, forType: .string)
             }
+            if showsBackupOptions {
+                backupOptions
+            }
             Divider()
             Button(removeTitle, role: .destructive, action: onRemove)
+        }
+    }
+
+    @ViewBuilder private var backupOptions: some View {
+        let statuses = urls.compactMap { model.backupStatus[$0] }
+        if statuses.contains(.included) || statuses.contains(.excluded) {
+            Divider()
+            if statuses.contains(.included) {
+                Button("Exclude from Time Machine") { model.setExcludedFromBackup(true, for: urls) }
+            }
+            if statuses.contains(.excluded) {
+                Button("Include in Time Machine") { model.setExcludedFromBackup(false, for: urls) }
+            }
         }
     }
 }

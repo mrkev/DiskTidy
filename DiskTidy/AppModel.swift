@@ -82,11 +82,27 @@ final class AppModel {
     private(set) var summary: String?
     private(set) var hasFullDiskAccess = FullDiskAccess.isGranted
     private(set) var cleanup: [CleanupCategory: CleanupState] = [:]
+    /// Time Machine status of the large files, filled in after each change to the list
+    /// while `tracksBackupStatus` is on.
+    private(set) var backupStatus: [URL: BackupStatus] = [:]
+    /// Set while the Backup column is showing; reading the status costs about 0.5 ms per item.
+    var tracksBackupStatus = false {
+        didSet {
+            guard tracksBackupStatus != oldValue else { return }
+            if tracksBackupStatus {
+                refreshBackupStatus()
+            } else {
+                backupStatusTask?.cancel()
+                backupStatus = [:]
+            }
+        }
+    }
     var lastError: String?
 
     /// Items at least as big as the smallest threshold any view needs.
     private var scannedItems: [FileEntry] = []
     private var scanTask: Task<Void, Never>?
+    private var backupStatusTask: Task<Void, Never>?
     private var installedApps: InstalledApps?
 
     private static let settingsKey = "scanSettings"
@@ -144,6 +160,7 @@ final class AppModel {
                     Task { @MainActor [weak self] in self?.update(progress) }
                 }
                 scannedItems = scan.items
+                backupStatus = [:]
                 recomputeLargeFiles()
                 duplicateGroups = []
                 hasScanned = true
@@ -190,6 +207,32 @@ final class AppModel {
 
     private func recomputeLargeFiles() {
         largeFiles = LargeFileFinder.find(in: scannedItems, minimumSize: largeFileThreshold)
+        refreshBackupStatus()
+    }
+
+    // MARK: Time Machine
+
+    func setExcludedFromBackup(_ excluded: Bool, for urls: Set<URL>) {
+        let urls = urls.filter { backupStatus[$0]?.canToggle ?? true }
+        guard !urls.isEmpty else { return }
+        Task {
+            let failures = await BackupExclusion.setExcluded(excluded, for: Array(urls))
+            refreshBackupStatus()
+            showFailures(failures) { "Couldn't \(excluded ? "exclude" : "include") \($0) item(s) \(excluded ? "from" : "in") Time Machine." }
+        }
+    }
+
+    /// Re-reads the status of every large file. Excluding a folder can change the items inside it,
+    /// so this covers the whole list rather than just the items that changed.
+    private func refreshBackupStatus() {
+        backupStatusTask?.cancel()
+        let urls = largeFiles.map(\.url)
+        guard tracksBackupStatus, !urls.isEmpty else { return }
+        backupStatusTask = Task {
+            let statuses = await BackupExclusion.status(of: urls)
+            guard !Task.isCancelled else { return }
+            backupStatus.merge(statuses) { $1 }
+        }
     }
 
     func size(of urls: Set<URL>) -> Int64 {
@@ -269,14 +312,17 @@ final class AppModel {
         hasFullDiskAccess = FullDiskAccess.isGranted
     }
 
-    private func showFailures(_ failures: [URL: String]) {
+    private func showFailures(
+        _ failures: [URL: String],
+        summary: (Int) -> String = { "Couldn't remove \($0) item(s)." }
+    ) {
         guard !failures.isEmpty else { return }
         let details = failures
             .sorted { $0.key.lastPathComponent < $1.key.lastPathComponent }
             .prefix(5)
             .map { "\($0.key.lastPathComponent): \($0.value)" }
             .joined(separator: "\n")
-        lastError = "Couldn't remove \(failures.count) item(s).\n\n\(details)"
+        lastError = "\(summary(failures.count))\n\n\(details)"
     }
 
     private func chooseFolders(message: String, startingAt directory: URL?) -> [URL]? {
