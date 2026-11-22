@@ -1,4 +1,5 @@
 import AppKit
+import QuickLook
 import ScanKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -63,10 +64,14 @@ struct FileContextMenu: View {
     @Environment(AppModel.self) private var model
     let urls: Set<URL>
     var removeTitle = "Move to Trash…"
+    var onQuickLook: (() -> Void)?
     let onRemove: () -> Void
 
     var body: some View {
         if !urls.isEmpty {
+            if let onQuickLook {
+                Button("Quick Look", action: onQuickLook)
+            }
             Button("Show in Finder") { model.reveal(urls) }
             if urls.count == 1, let url = urls.first {
                 Button("Open") { NSWorkspace.shared.open(url) }
@@ -145,6 +150,13 @@ struct EmptyResultsView: View {
 }
 
 extension View {
+    /// Space toggles Quick Look for the selected items, like Finder.
+    /// `orderedURLs` is the list's display order, so the preview panel steps through
+    /// the selection in the same order. While the panel is open it follows the selection.
+    func quickLook(selection: Set<URL>, orderedURLs: @escaping () -> [URL], preview: Binding<URL?>) -> some View {
+        modifier(QuickLookSupport(selection: selection, orderedURLs: orderedURLs, preview: preview))
+    }
+
     /// Confirms before removing items. Set `pending` to ask.
     func trashConfirmation(
         pending: Binding<Set<URL>?>,
@@ -156,6 +168,35 @@ extension View {
         modifier(RemovalConfirmation(
             pending: pending, actionTitle: actionTitle, bytes: bytes, warning: warning, perform: perform
         ))
+    }
+}
+
+private struct QuickLookSupport: ViewModifier {
+    let selection: Set<URL>
+    let orderedURLs: () -> [URL]
+    @Binding var preview: URL?
+
+    func body(content: Content) -> some View {
+        content
+            .onKeyPress(.space) {
+                if preview != nil {
+                    preview = nil
+                } else {
+                    guard let first = selectedInOrder.first else { return .ignored }
+                    preview = first
+                }
+                return .handled
+            }
+            .onChange(of: selection) {
+                guard preview != nil else { return }
+                preview = selectedInOrder.first
+            }
+            .quickLookPreview($preview, in: preview == nil ? [] : selectedInOrder)
+    }
+
+    private var selectedInOrder: [URL] {
+        guard !selection.isEmpty else { return [] }
+        return orderedURLs().filter(selection.contains)
     }
 }
 

@@ -5,6 +5,7 @@ struct DuplicatesView: View {
     @Environment(AppModel.self) private var model
     @State private var selection = Set<URL>()
     @State private var pendingTrash: Set<URL>?
+    @State private var preview: URL?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,10 +43,15 @@ struct DuplicatesView: View {
                     }
                 }
                 .contextMenu(forSelectionType: URL.self) { urls in
-                    FileContextMenu(urls: urls, onRemove: { pendingTrash = urls })
+                    FileContextMenu(
+                        urls: urls,
+                        onQuickLook: { preview = orderedURLs().first(where: urls.contains) },
+                        onRemove: { pendingTrash = urls }
+                    )
                 } primaryAction: { urls in
                     model.reveal(urls)
                 }
+                .quickLook(selection: selection, orderedURLs: orderedURLs, preview: $preview)
             }
 
             Divider()
@@ -59,9 +65,14 @@ struct DuplicatesView: View {
             )
         }
         .trashConfirmation(pending: $pendingTrash, bytes: model.size(of:), warning: warning(for:)) { urls in
+            preview = nil
             model.moveToTrash(urls)
             selection.subtract(urls)
         }
+    }
+
+    private func orderedURLs() -> [URL] {
+        model.duplicateGroups.flatMap { $0.files.map(\.url) }
     }
 
     private var fullySelectedGroupCount: Int {

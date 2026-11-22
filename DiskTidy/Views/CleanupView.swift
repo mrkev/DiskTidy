@@ -7,6 +7,7 @@ struct CleanupView: View {
     @Environment(AppModel.self) private var model
     @State private var selection = Set<URL>()
     @State private var pendingRemoval: Set<URL>?
+    @State private var preview: URL?
     @AppStorage("downloadsMinimumAgeDays") private var minimumAgeDays = 90
 
     private static let ageChoices = [30, 90, 180, 365]
@@ -30,6 +31,7 @@ struct CleanupView: View {
             bytes: bytes(of:),
             warning: warning(for:)
         ) { urls in
+            preview = nil
             model.clean(urls, in: category)
             selection.subtract(urls)
         }
@@ -87,10 +89,20 @@ struct CleanupView: View {
                     }
                 }
                 .contextMenu(forSelectionType: URL.self) { urls in
-                    FileContextMenu(urls: urls, removeTitle: "Remove…", onRemove: { pendingRemoval = urls })
+                    FileContextMenu(
+                        urls: urls,
+                        removeTitle: "Remove…",
+                        onQuickLook: { preview = groups.flatMap(\.items).first { urls.contains($0.url) }?.url },
+                        onRemove: { pendingRemoval = urls }
+                    )
                 } primaryAction: { urls in
                     model.reveal(urls)
                 }
+                .quickLook(
+                    selection: selection,
+                    orderedURLs: { groups.flatMap { $0.items.map(\.url) } },
+                    preview: $preview
+                )
             }
         } else {
             ProgressView("Measuring…")
